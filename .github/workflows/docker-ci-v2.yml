@@ -90,7 +90,7 @@ jobs:
 
         with:
           image-ref: local/python-app:${{ github.sha }}
-          trivy-args: '--skip-version-check'
+          skip-setup-trivy: true
 
           format: table
           exit-code: "1"
