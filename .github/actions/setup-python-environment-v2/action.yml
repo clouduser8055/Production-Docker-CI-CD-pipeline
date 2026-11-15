@@ -1,0 +1,149 @@
+name: Setup Python Environment
+
+description: Set up Python and Install project dependencies.
+
+inputs:
+  python-version:
+    description: Python version to install
+    required: false
+    default: "3.13"
+
+  requirements-file:
+    description: Path to requirements.txt 
+    required: false
+    default: "requirements.txt"
+
+  install-dependencies:
+    description: Whether to intall python dependencies
+    required: false
+    default: "true"
+
+outputs:
+  python-version:
+    description: Installed Python version
+    value: ${{ steps.python-info.outputs.version }}
+
+  python-executable:
+    description: Python executable Path
+    value: ${{ steps.python-info.outputs.executable }}
+
+  dependencies-installed:
+    description: Whether dependencies were installed
+    value: ${{ steps.dependencies.outputs.installed  || 'false' }}
+
+runs:
+  using: composite
+
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        PYTHON_VERSION: ${{ inputs.python-version }}
+        REQUIREMENTS_FILE:  ${{ inputs.requirements-file }}
+        INSTALL_DEPENDENCIES: ${{ inputs.install-dependencies }}
+
+        ACTION_PATH: ${{ github.action_path }}
+
+      run: bash "$ACTION_PATH/scripts/validate.sh"
+
+    - name: Setup python
+      uses: actions/setup-python@v7.1.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install dependencies
+      id: dependencies
+      if: ${{ inputs.install-dependencies == 'true' }}
+      shell: bash
+
+      env:
+        REQUIREMENTS_FILE: ${{ inputs.requirements-file }}
+        INSTALL_DEPENDENCIES: ${{ inputs.install-dependencies }}
+
+        ACTION_PATH: ${{ github.action_path }}
+
+      run: bash "$ACTION_PATH/scripts/install-dependencies.sh"
+
+    - name: Skip Dependency Installation
+      if: ${{ inputs.install-dependencies == 'false' }}
+      shell: bash
+      run: |
+        echo "Dependency installation was skipped."
+        
+    - name: Get python information
+      id: python-info
+      shell: bash
+
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+
+      run: bash "$ACTION_PATH/scripts/python-info.sh"
+
+    - name: Report Setup Failure
+      if: ${{ failure() }}
+
+      shell: bash
+
+      run: |
+        echo "::error::Python environment setup failed."
+        echo "::error::Check the previous steps for the root cause."
+
+    - name: Create temporary directory
+      id: temp
+
+      shell: bash
+
+      run: |
+        temp_dir=$(mktemp -d)
+        echo "Directory=$temp_dir" >> "$GITHUB_OUTPUT"
+
+    - name: Perform operation
+      shell: bash
+      run: echo "Performing operation....."
+
+    - name: Cleanup Temporary Directory
+      if: ${{ always() }}
+      shell: bash
+
+      env:
+        TEMP_DIR: ${{ steps.temp.outputs.Directory }}
+
+      run: |
+        if [[ -n "$TEMP_DIR" && -d "$TEMP_DIR" ]];then
+          rm -rf "${TEMP_DIR:?}"
+          echo "Temporary directory removed."
+        fi
+
+    - name: Run security scan
+      id: security-scan
+      continue-on-error: true
+      shell: bash
+      run: |
+        echo "Running security scan...."
+        exit 1
+
+    - name: Build docker image
+      shell: bash
+      run: |
+        echo "Building docker image....."
+
+    - name: Report security scan
+      if: ${{ always() }}
+
+      shell: bash
+
+      env:
+        SCAN_OUTCOME: ${{ steps.security-scan.outcome }}
+        SCAN_CONCLUSION: ${{ steps.security-scan.conclusion }} 
+
+      run: |
+        echo "security scan result: $SCAN_OUTCOME"
+        echo "security scan conclusion: $SCAN_CONCLUSION"
+
+        if [[ "$SCAN_OUTCOME" == "failure" ]];then
+          echo "::warning::Security scan found a problem."
+        fi
+
+        if [[ "$SCAN_CONCLUSION" == "success" ]];then
+          echo "::warning::Security scan conclusion found!"
+        fi
