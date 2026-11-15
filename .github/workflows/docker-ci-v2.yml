@@ -95,7 +95,7 @@ jobs:
           exit-code: "1"
 
           ignore-unfixed: true
-          vuln-type: OS,library
+          vuln-type: os,library
           severity: HIGH,CRITICAL
 
   publish:
