@@ -90,7 +90,6 @@ jobs:
 
         with:
           image-ref: local/python-app:${{ github.sha }}
-          skip-setup-trivy: true
 
           format: table
           exit-code: "1"
@@ -98,6 +97,9 @@ jobs:
           ignore-unfixed: true
           vuln-type: os,library
           severity: HIGH,CRITICAL
+          
+        env:
+          TRIVY_SKIP_VERSION_CHECK: true
 
   publish:
     name: Publish Docker Image to GHCR
