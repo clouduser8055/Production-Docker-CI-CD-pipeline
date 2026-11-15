@@ -85,46 +85,21 @@ jobs:
           docker image inspect local/python-app:${{ github.sha }}
           docker run --rm local/python-app:${{ github.sha }}
 
-      # - name: Scan Docker Image
-      #   uses: aquasecurity/trivy-action@v0.36.0
-
-      #   with:
-      #     image-ref: local/python-app:${{ github.sha }}
-
-      #     format: table
-      #     exit-code: "1"
-
-      #     ignore-unfixed: true
-      #     vuln-type: os,library
-      #     severity: HIGH,CRITICAL
-
-      #   env:
-      #     TRIVY_SKIP_VERSION_CHECK: true
-
-      - name: Generate Trivy Vulnerability Report
+      - name: Scan Docker Image
         uses: aquasecurity/trivy-action@v0.36.0
 
         with:
           image-ref: local/python-app:${{ github.sha }}
 
-          format: json
-          output: trivy-report.json
-
-          exit-code: "0"
+          format: table
+          exit-code: "1"
 
           ignore-unfixed: true
           vuln-type: os,library
-          severity: HIGH,CRITICAL
+          severity: CRITICAL
 
-      - name: Upload Trivy Report
-        if: always()
-        uses: actions/upload-artifact@v4
-
-        with:
-          name: trivy-security-report
-          path: trivy-report.json
-          if-no-files-found: warn
-          retention-days: 7
+        env:
+          TRIVY_SKIP_VERSION_CHECK: true
 
 
   publish:
