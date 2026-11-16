@@ -85,33 +85,55 @@ jobs:
         run: |
           docker run -d --name python-web-service -p 8000:8000 local/python-app:${{ github.sha }}
 
-      - name: HTTP Health Check
+      - name: Wait for Docker Health
         run: |
-          for attempt in {1..30}; do
+          for attempt in {1..40}; do
 
-            if response=$(curl --fail --silent \
-              http://127.0.0.1:8000/health); then
+            status=$(docker inspect \
+              --format='{{.State.Health.Status}}' \
+              python-web-service)
 
-              echo "Health endpoint responded: $response"
+            echo "Container health: $status"
 
-              python -c '
-          import json
-          import sys
-          data = json.load(sys.stdin)
-          assert data.get("status") == "healthy", data
-          ' <<< "$response"
-
-              echo "Web service is healthy!"
+            if [ "$status" = "healthy" ]; then
+              echo "Container is healthy!"
               exit 0
             fi
 
-            echo "Waiting for web service... attempt $attempt"
+            if [ "$status" = "unhealthy" ]; then
+              docker logs python-web-service
+              exit 1
+            fi
+
             sleep 2
           done
 
-          echo "Web service failed to become healthy."
+          echo "Health check timed out."
+          docker logs python-web-service
           exit 1
-          
+
+      - name: Test HTTP Endpoints
+        run: |
+          echo "Testing home endpoint..."
+
+          curl --fail --silent --show-error \
+            http://127.0.0.1:8000/
+
+          echo "Testing health endpoint..."
+
+          response=$(curl --fail --silent --show-error \
+            http://127.0.0.1:8000/health)
+
+          echo "$response" | python -c '
+          import json
+          import sys
+
+          data = json.load(sys.stdin)
+          assert data.get("status") == "healthy", data
+
+          print("HTTP health test passed!")
+          '
+
       - name: Scan Docker Image
         uses: aquasecurity/trivy-action@v0.36.0
 
