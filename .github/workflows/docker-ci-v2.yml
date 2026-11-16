@@ -96,7 +96,7 @@ jobs:
 
           ignore-unfixed: true
           vuln-type: os,library
-          severity: CRITICAL
+          severity: HIGH,CRITICAL
 
         env:
           TRIVY_SKIP_VERSION_CHECK: true
