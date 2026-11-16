@@ -1,16 +1,35 @@
-FROM python:3.13-slim
+FROM python:3.13-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
+FROM base AS builder
+
 WORKDIR /app
+
+RUN python -m venv /opt/venv
+
+ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt .
 
 RUN python -m pip install --no-cache-dir -r requirements.txt \
     && python -m pip check \
     && python -m pip uninstall -y pip setuptools
+
+FROM base AS runtime
+
+WORKDIR /app
+
+RUN python -m pip uninstall -y pip setuptools
+
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY --from=builder /opt/venv /opt/venv
 
 COPY main.py .
 
