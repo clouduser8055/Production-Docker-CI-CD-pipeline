@@ -12,6 +12,8 @@ RUN python -m pip install --no-cache-dir -r requirements.txt \
     && python -m pip check \
     && python -m pip uninstall -y pip setuptools
 
-COPY . .
+COPY main.py .
 
-CMD ["python", "hello.py"]
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

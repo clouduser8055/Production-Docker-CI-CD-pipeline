@@ -53,6 +53,7 @@ jobs:
     runs-on: ubuntu-latest
 
     needs: python-tests
+    timeout-minutes: 10
 
     permissions: 
       contents: read
@@ -80,10 +81,36 @@ jobs:
 
           cache-from: type=gha,scope=python-app
 
-      - name: Verify Docker Image
+      - name: Start Web Service
         run: |
-          docker image inspect local/python-app:${{ github.sha }}
-          docker run --rm local/python-app:${{ github.sha }}
+          docker run -d --name python-web-service -p 8000:8000 local/python-app:${{ github.sha }}
+
+      - name: HTTP Health Check
+        run: |
+          for attempt in {1..30}; do
+
+            if response=$(curl --fail --silent http://127.0.0.1:8000/health);then
+              
+              echo "Health endpoint responded: $response"
+
+              python c '
+            import json
+            import sys
+            data = json.load(sys.stdin)
+            assert data.get("status") == "healthy", data
+            ' <<< "$response"
+
+              echo "Web service is healthy!"
+              exit 0
+            fi
+
+            echo "Waiting for web service... attempt $attempt"
+            sleep 2
+
+          done
+
+          echo "Web service failed to become healthy."
+          exit 1
 
       - name: Scan Docker Image
         uses: aquasecurity/trivy-action@v0.36.0
@@ -100,6 +127,16 @@ jobs:
 
         env:
           TRIVY_SKIP_VERSION_CHECK: true
+
+      - name: Show container logs
+        if: failure()
+        run: |
+          docker logs python-web-service || true
+
+      - name: Cleanup container
+        if: always()
+        run: |
+          docker rm -f python-web-service || true
 
 
   publish:
