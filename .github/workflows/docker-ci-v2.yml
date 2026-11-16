@@ -89,16 +89,17 @@ jobs:
         run: |
           for attempt in {1..30}; do
 
-            if response=$(curl --fail --silent http://127.0.0.1:8000/health);then
-              
+            if response=$(curl --fail --silent \
+              http://127.0.0.1:8000/health); then
+
               echo "Health endpoint responded: $response"
 
-              python c '
-            import json
-            import sys
-            data = json.load(sys.stdin)
-            assert data.get("status") == "healthy", data
-            ' <<< "$response"
+              python -c '
+          import json
+          import sys
+          data = json.load(sys.stdin)
+          assert data.get("status") == "healthy", data
+          ' <<< "$response"
 
               echo "Web service is healthy!"
               exit 0
@@ -106,12 +107,11 @@ jobs:
 
             echo "Waiting for web service... attempt $attempt"
             sleep 2
-
           done
 
           echo "Web service failed to become healthy."
           exit 1
-
+          
       - name: Scan Docker Image
         uses: aquasecurity/trivy-action@v0.36.0
 
