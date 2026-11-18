@@ -201,7 +201,7 @@ jobs:
 
           tags: |
             type=ref,event=branch
-            type=sha,prefix=sha-
+            type=sha,prefix=sha-,format=long
             type=raw,value=latest,enable={{is_default_branch}}
         
       - name: Build and Push Docker Image
@@ -223,3 +223,111 @@ jobs:
 
           sbom: true
           provenance: true
+
+  deploy:
+    name: Deploy to AWS EC2
+    runs-on: ubuntu-latest
+    needs: 
+      - publish
+
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+    timeout-minutes: 15
+
+    permissions: 
+      contents: read
+      id-token: write
+
+    env:
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      IMAGE_URI: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: GitHubActionsEC2Deploy
+
+      - name: Verify AWS Identity
+        run: |
+          aws sts get-caller-identity
+
+      - name: Prepare Deployment Parameters
+        run: |
+          jq -n --arg image "$IMAGE_URI" '{
+            commands: [
+              "set -eu",
+              ("docker pull " + $image),
+              "docker rm -f python-web-service || true",
+              ("docker run -d --name python-web-service --restart unless-stopped -p 80:8000 " + $image),
+              "for attempt in $(seq 1 30); do status=$(docker inspect --format='\''{{.State.Health.Status}}'\'' python-web-service 2>/dev/null || true); if [ \"$status\" = \"healthy\" ]; then echo \"Application is healthy\"; exit 0; fi; sleep 2; done",
+              "docker logs python-web-service",
+              "exit 1"
+            ]
+          }' > ssm-parameters.json
+
+      - name: Send Deployment commands
+        id: ssm
+        run: |
+          COMMAND_ID=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --comment "Deploy commit $GITHUB_SHA" \
+            --parameters file://ssm-parameters.json \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "SSM Command ID: $CommandId"
+          echo "command_id=$COMMAND_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Deployment
+        env:
+          COMMAND_ID: ${{ steps.ssm.outputs.command_id }}
+        run: |
+          for attempt in $(seq 1 60); do
+
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \ 
+              --instance-id "$EC2_INSTANCE_ID" \ 
+              --query "Status" \ 
+              --output text 2>/dev/null || echo "Pending")
+
+            echo "Deployment Status: $STATUS"
+
+            case "$STATUS" in 
+              Success)
+                aws ssm get-command-invocation \ 
+                  --command-id "$COMMAND_ID" \ 
+                  --instance-id "$EC2_INSTANCE_ID" \ 
+                  --query "StandardOutputContent" \
+                  --output text 
+                exit 0
+                ;;
+              
+              Failed|TimedOut|Cancelled|Cancelling)
+                aws ssm get-command-invocation \ 
+                  --command-id "$COMMAND_ID" \ 
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --query '{Status:Status,Ouput:StandardOutputContent,Error:StandardErrorContent}' \
+                  --output json || true
+                exit 1
+                ;;
+            esac
+
+            sleep 10
+          
+          done
+
+          echo "Deployment timed out."
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$EC2_INSTANCE_ID" \
+            --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' \
+            --output json || true
+
+          exit 1
+
+
+    
