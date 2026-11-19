@@ -354,9 +354,19 @@ jobs:
 
           echo "Replacing production container..."
 
-          if docker inspec "$APP" >/dev/null 2>&1; then
-            docker rm -f "$APP"
+          echo "Removing previous production container..."
+
+          if docker inspect "$APP" >/dev/null 2>&1; then
+              docker rm -f "$APP"
           fi
+
+          if docker inspect "$APP" >/dev/null 2>&1; then
+              echo "ERROR: Production container name is still occupied."
+              docker ps -a --no-trunc --filter "name=^/${APP}$"
+              exit 1
+          fi
+
+          echo "Production container name is now available."
 
           if docker run -d --name "$APP" --restart unless-stopped -p 80:8000 "$IMAGE_URI"; then
             if wait_for_health "$APP"; then
