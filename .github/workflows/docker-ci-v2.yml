@@ -230,6 +230,10 @@ jobs:
     needs: 
       - publish
 
+    concurrency:
+      group: production-ec2-deployment
+      cancel-in-progress: false
+
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
     timeout-minutes: 15
@@ -255,18 +259,131 @@ jobs:
           aws sts get-caller-identity
 
       - name: Prepare Deployment Parameters
+        shell: bash
+
+        # run: |
+        #   jq -n --arg image "$IMAGE_URI" '{
+        #     commands: [
+        #       "set -eu",
+        #       ("docker pull " + $image),
+        #       "docker rm -f python-web-service || true",
+        #       ("docker run -d --name python-web-service --restart unless-stopped -p 80:8000 " + $image),
+        #       "for attempt in $(seq 1 30); do status=$(docker inspect --format='\''{{.State.Health.Status}}'\'' python-web-service 2>/dev/null || true); if [ \"$status\" = \"healthy\" ]; then echo \"Application is healthy\"; exit 0; fi; sleep 2; done",
+        #       "docker logs python-web-service",
+        #       "exit 1"
+        #     ]
+        #   }' > ssm-parameters.json
+
         run: |
-          jq -n --arg image "$IMAGE_URI" '{
-            commands: [
-              "set -eu",
-              ("docker pull " + $image),
-              "docker rm -f python-web-service || true",
-              ("docker run -d --name python-web-service --restart unless-stopped -p 80:8000 " + $image),
-              "for attempt in $(seq 1 30); do status=$(docker inspect --format='\''{{.State.Health.Status}}'\'' python-web-service 2>/dev/null || true); if [ \"$status\" = \"healthy\" ]; then echo \"Application is healthy\"; exit 0; fi; sleep 2; done",
-              "docker logs python-web-service",
-              "exit 1"
-            ]
-          }' > ssm-parameters.json
+          cat > deploy.sh <<'REMOTE_SCRIPT'
+          set -eu
+
+          APP="python-web-service"
+          CANDIDATE="python-web-service-candidate"
+
+          OLD_IMAGE=""
+
+          echo "Checking current production container..."
+
+          if docker inspect "$APP" >/dev/null 2>&1; then
+            OLD_IMAGE=$(docker inspect --format='{{.Config.Image}}' "$APP")
+
+            echo "Previous Image: $OLD_IMAGE"
+          fi
+
+          echo "Pulling new image: $IMAGE_URI"
+
+          docker pull "$IMAGE_URI"
+
+          echo "Starting candidate container...."
+
+          docker rm -f "$CANDIDATE" >/dev/null 2>&1 || true
+
+          docker run -d --name "$CANDIDATE" -p 127.0.0.1:18000:8000 "$IMAGE_URI"
+
+          wait_for_health() {
+            container_name="$1"
+
+            for attempt in $(seq 1 30); do
+
+              status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || true)
+
+              echo "$container_name health: $status"
+
+              if [ "$status" == "healthy"]; then
+                return 0
+              fi
+
+              if [ "$status" == "unhealthy" ]; then
+                return 1
+              fi
+
+              sleep 2
+            done
+
+            return 1
+          }
+
+          echo "Checking candidate health...."
+
+          if ! wait_for_health "$CANDIDATE"; then
+            echo "Candidate failed. Existing production remains untouched."
+            docker logs "$CANDIDATE" || true
+            docker rm -f "$CANDIDATE" || true
+            exit 1
+          fi 
+
+          echo "Candidate passed health checks."
+
+          docker rm -f "$CANDIDATE" 
+
+          echo "Replacing production container..."
+
+          if docker inspec "$APP" >/dev/null 2>&1; then
+            docker rm -f "$APP"
+          fi
+
+          if docker run -d --name "$APP" --restart unless-stopped -p 80:8000 "$IMAGE_URI"; then
+            if wait_for_health "$APP"; then
+              echo "New production deployment successful"
+              exit 0
+            fi
+          fi
+
+          echo "New deployment failed."
+
+          docker logs "$APP" || true
+          docker rm -f "$APP" || true
+
+          if [ -n "$OLD_IMAGE" ]; then
+
+            echo "Rolling back to: $OLD_IMAGE"
+
+            docker run -d --name "$APP" --restart unless-stopped -p 80:8000 "$OLD_IMAGE"
+
+            if wait_for_health "$APP"; then
+              echo "Rollback successful. Previous applicatin restored."
+            else
+              echo "CRITICAL: Rollback also failed."
+              docker logs "$APP" || true
+              exit 1
+            fi
+
+          else
+            echo "No Previous production image exists."
+
+          fi
+
+          exit 1
+
+          REMOTE_SCRIPT
+
+          jq -n \
+            --arg image "$IMAGE_URI" \
+            --rawfile script deploy.sh \
+            '{commands: [("$IMAGE_URI=" + ($image | @sh) + "\n" + $script)]}' \
+            > ssm-parameters.json
+
 
       - name: Send Deployment commands
         id: ssm
@@ -329,6 +446,51 @@ jobs:
             --output json || true
 
           exit 1
+
+
+      - name: Verify Public Application
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "$APP_URL" ]; then
+            echo "APP_URL is not configured."
+            exit 1
+          fi
+
+          for attempt in {1..15}; do 
+
+            echo "Checking public application.... attempt $attempt"
+
+            if response=$(curl \
+              --fail \
+              --silent \
+              --show-error \
+              --max-time 5 \
+              "$APP_URL/health" 2>/dev/null); then
+
+              echo "$response" | python -c '
+          import json
+          import sys
+
+          data = json.load(sys.stdin)
+
+          assert data.get("status") == "healthy", data
+
+          print("Public application is healthy!")
+          ' 
+
+              exit 0
+            fi
+
+            sleep 5
+          done
+
+          echo "Public application verification failed."
+          exit 1
+
 
 
     
