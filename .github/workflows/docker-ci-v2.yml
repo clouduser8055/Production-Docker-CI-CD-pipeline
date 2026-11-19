@@ -278,8 +278,25 @@ jobs:
           cat > deploy.sh <<'REMOTE_SCRIPT'
           set -eu
 
+          exec 9>/var/lock/python-web-service-deploy.lock
+
+          if ! flock -w 300 9; then
+              echo "Another deployment is still running."
+              exit 1
+          fi
+
+          echo "Deployment lock acquired."
+
           APP="python-web-service"
           CANDIDATE="python-web-service-candidate"
+
+          if [ "$APP" = "$CANDIDATE" ]; then
+            echo "ERROR: Production and candidate names must be different."
+            exit 1
+          fi
+
+          echo "Production container name: $APP"
+          echo "Candidate container name: $CANDIDATE"
 
           OLD_IMAGE=""
 
@@ -295,7 +312,8 @@ jobs:
 
           docker pull "$IMAGE_URI"
 
-          echo "Starting candidate container...."
+          echo "===== STARTING CANDIDATE ====="
+          echo "Candidate: $CANDIDATE"
 
           docker rm -f "$CANDIDATE" >/dev/null 2>&1 || true
 
@@ -352,7 +370,10 @@ jobs:
 
           docker rm -f "$CANDIDATE" 
 
-          echo "Replacing production container..."
+          echo "===== REPLACING PRODUCTION ====="
+
+          docker ps -a --no-trunc \
+            --filter "name=^/${APP}$"
 
           echo "Removing previous production container..."
 
@@ -433,7 +454,7 @@ jobs:
             --query "Command.CommandId" \
             --output text)
 
-          echo "SSM Command ID: $CommandId"
+          echo "SSM Command ID: $COMMAND_ID"
           echo "command_id=$COMMAND_ID" >> "$GITHUB_OUTPUT"
 
       - name: Wait for Deployment
@@ -464,7 +485,7 @@ jobs:
                 aws ssm get-command-invocation \
                   --command-id "$COMMAND_ID" \
                   --instance-id "$EC2_INSTANCE_ID" \
-                  --query '{Status:Status,Ouput:StandardOutputContent,Error:StandardErrorContent}' \
+                  --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' \
                   --output json || true
                 exit 1
                 ;;
