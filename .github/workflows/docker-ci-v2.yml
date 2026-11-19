@@ -381,9 +381,17 @@ jobs:
           jq -n \
             --arg image "$IMAGE_URI" \
             --rawfile script deploy.sh \
-            '{commands: [("$IMAGE_URI=" + ($image | @sh) + "\n" + $script)]}' \
-            > ssm-parameters.json
+            '{
+              commands: [
+                "set -eu",
+                ("export IMAGE_URI=" + ($image | @sh)),
+                $script
+              ]
+            }' > ssm-parameters.json
 
+          echo "Prepared deployment for: $IMAGE_URI"
+
+          jq -r '.commands[0], .commands[1]' ssm-parameters.json
 
       - name: Send Deployment commands
         id: ssm
@@ -490,7 +498,3 @@ jobs:
 
           echo "Public application verification failed."
           exit 1
-
-
-
-    
