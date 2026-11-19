@@ -306,21 +306,36 @@ jobs:
 
             for attempt in $(seq 1 30); do
 
-              status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null || true)
+              status=$(docker inspect \
+                --format='{{.State.Health.Status}}' \
+                "$container_name" 2>/dev/null || true)
 
               echo "$container_name health: $status"
 
-              if [ "$status" == "healthy"]; then
-                return 0
-              fi
+              case "$status" in
+                healthy)
+                  echo "Container is healthy!"
+                  return 0
+                  ;;
 
-              if [ "$status" == "unhealthy" ]; then
-                return 1
-              fi
+                unhealthy)
+                  echo "Container is unhealthy!"
+                  return 1
+                  ;;
+
+                starting|"")
+                  echo "Waiting for health check..."
+                  ;;
+
+                *)
+                  echo "Unexpected health status: $status"
+                  ;;
+              esac
 
               sleep 2
             done
 
+            echo "Health check timed out."
             return 1
           }
 
@@ -377,6 +392,10 @@ jobs:
           exit 1
 
           REMOTE_SCRIPT
+
+          echo "===== Generated deployment script ====="
+          nl -ba deploy.sh
+          echo "========================================"
 
           jq -n \
             --arg image "$IMAGE_URI" \
